@@ -76,8 +76,10 @@ report, in a few lines:
   runs, commit-message conventions (`git log --format=%B -20`);
 - its checks: test command, linters, any doc checker;
 - its docs: README only, `docs/`, a wiki; any page conventions;
-- the agent surfaces it already has (the inventory's last section) and
-  the harnesses its contributors use, if known.
+- the agent surfaces it already has (the inventory's last section);
+- the harnesses its agents run in, and which of those run hooks at all.
+  A hook adds nothing in a harness that doesn't run it, and under an
+  unattended permission mode an "ask" prompts nobody.
 
 A mechanism can only be ported to a target that has the thing it acts
 on. A skill for keeping wiki pages in sync needs a wiki; a guard for a
@@ -112,6 +114,12 @@ hook and the settings that wire it, a rule and the lesson it cites
 travel as one candidate or not at all. `names` in the inventory is the
 starting point; confirm each by reading, since a "see also" is not a
 dependency.
+
+Then split each candidate into its **automatic** half (a hook, a check, a
+CI step: it fires without anyone asking) and its **convention** half (an
+instruction an agent can skip). The report says which half the port
+brings. Porting only the convention half of a mechanism the source held
+automatically is a downgrade, and the report has to say so.
 
 ## Step 4: classify and report
 
@@ -166,6 +174,30 @@ conventions:
   every session. Port a line only when its failure mode is common in the
   target; otherwise put the rule in the skill or rule file for that task
   and leave a one-line pointer.
+- **A convention held by one layer isn't held.** A local git hook runs
+  only in clones that wired it, so pair it with a CI check of the same
+  rule, and with the harness's own setting where one exists (commit
+  attribution, say). Each layer backs up the one before.
+- **CI runs the contributors' command, not a copy of its steps.** One
+  entry point (a recipe, a script) is the checklist; CI and the pre-push
+  hook call it, so a step added there gates everything with no second
+  edit.
+- **Hooks keep their decision form.** A guard that must hold denies,
+  because an ask is a no-op under unattended permission modes. Text the
+  agent must read goes where the agent sees it, not only where the human
+  does. A skill that depends on a hook says so in one tagged line, so an
+  agent in a harness without hooks knows to warn the user and check
+  commands by hand.
+- **Pre-approved permissions are re-justified, not copied.** Port only
+  read-only commands with a closed argument surface. A wildcard over a
+  general tool (an interpreter, a package manager, a build tool's eval)
+  never qualifies.
+- **A lesson ports as its rule, in its Home.** The Home is the file an
+  agent doing that task already reads (the instructions file, a skill, a
+  rule file). The source's account stays in the source behind a pointer.
+  A rule that only an index states reaches nobody. If the target keeps a
+  lessons log, each entry records what enforces it, and `none` is an
+  honest answer.
 - **Security analysis stays private.** If a source keeps threat-model
   notes out of public text, keep that rule and don't carry the notes.
   Never copy secrets, key fingerprints, internal hostnames, or personal

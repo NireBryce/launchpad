@@ -61,6 +61,10 @@ class InventoryTest(unittest.TestCase):
                 {'type': 'command', 'command': 'x'}]}]},
             'permissions': {'allow': ['Bash(make test)']}}))
         write(self.a, '.agents/lessons-map.toml', '# map\n')
+        write(self.a, '.github/workflows/ci.yml',
+              'jobs:\n  t:\n    steps:\n      - run: python3 tools/check_trailers.py\n')
+        write(self.a, 'tools/check_trailers.py', '"""Fail on bad trailers."""\n')
+        write(self.a, 'tools/unwired.py', '"""Nobody calls this."""\n')
         write(self.a, 'src/main.py', 'print(1)\n')
         write(self.b, '.claude/skills/ship/SKILL.md', skill(
             'ship', 'Ships things.'))
@@ -87,7 +91,14 @@ class InventoryTest(unittest.TestCase):
             'wiki/agent-lessons-learned/': 'lessons',
             '.claude/settings.json': 'settings',
             '.agents/lessons-map.toml': 'agent-config',
+            '.github/workflows/ci.yml': 'ci',
+            'tools/check_trailers.py': 'wired-script',
         })
+
+    def test_wired_script_names_its_caller(self):
+        i = self.items(run(str(self.a)), 'alpha')['tools/check_trailers.py']
+        self.assertEqual(i['wired-by'], '.github/workflows/ci.yml')
+        self.assertEqual(i['summary'], 'Fail on bad trailers.')
 
     def test_lesson_articles_collapse_to_one_row(self):
         i = self.items(run(str(self.a)), 'alpha')['wiki/agent-lessons-learned/']

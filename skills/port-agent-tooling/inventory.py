@@ -21,6 +21,9 @@ with what the porting skill's tests need about each item:
            still be written in local nouns.
   evidence dated lines, issue/PR refs (#N), lesson refs (§N): whether
            the item has history behind it, the strongest porting signal.
+  wired-script  a repo file that CI, a git hook or harness settings call
+           by path, outside the agent directories (often a convention's
+           enforcing layer).
   names    other skills in the same source it mentions: candidate
            couplings, to confirm by reading (a passing "see also" is not
            a dependency).
@@ -166,7 +169,7 @@ def summary(text):
     if m:
         return m.group(1).strip()
     for line in body.splitlines():
-        s = line.strip().lstrip('#/"\'* ').strip()
+        s = line.strip().lstrip('#/"\'* ').rstrip('"\'').strip()
         if s and not s.startswith('!') and not s.startswith('-*-'):
             return s[:160]
     return ''
@@ -249,6 +252,31 @@ def collapse_articles(items):
     return out
 
 
+PATH_TOKEN_RX = re.compile(r'[\w.-]+(?:/[\w.-]+)+\.(?:py|sh|bash|js|ts|rb|pl)\b')
+WIRING_KINDS = {'ci', 'githook', 'settings', 'hook'}
+
+
+def wired_scripts(root, items):
+    """Repo files that CI, git hooks or harness settings call by path but
+    that live outside the conventional agent directories (a CI-only check,
+    a hook's helper). Without these, a convention's enforcing layer is
+    invisible to the inventory."""
+    have = {i['path'] for i in items}
+    found = {}
+    for i in items:
+        if i['kind'] not in WIRING_KINDS:
+            continue
+        for tok in PATH_TOKEN_RX.findall(i.get('_text', '')):
+            tok = tok.lstrip('./')
+            for cand in (tok, tok.split('/', 1)[-1]):
+                if cand in have or cand in found:
+                    break
+                if (root / cand).is_file():
+                    found[cand] = i['path']
+                    break
+    return found
+
+
 def scan(label, root, nouns):
     items = []
     noun_rx = (re.compile('|'.join(re.escape(n) for n in nouns), re.I)
@@ -279,6 +307,18 @@ def scan(label, root, nouns):
         }
         item['_text'] = text
         items.append(item)
+    for rel, by in sorted(wired_scripts(root, items).items()):
+        text = read(root / rel)
+        lines = text.splitlines()
+        items.append({
+            'source': label, 'kind': 'wired-script', 'path': rel,
+            'summary': summary(text), 'lines': len(lines),
+            'nouns': (sum(1 for ln in lines if noun_rx.search(ln))
+                      if noun_rx else 0),
+            'evidence': {'dates': len(DATE_RX.findall(text)),
+                         'issues': len(set(ISSUE_RX.findall(text))),
+                         'lessons': len(set(LESSON_RX.findall(text)))},
+            'wired-by': by, '_text': text})
     items = collapse_articles(items)
     # Skill directories that live behind a symlink (.claude/skills ->
     # .agents/skills) are never walked twice: walk() doesn't follow links.
@@ -314,7 +354,7 @@ def mark(sources, target_items):
 
 
 KIND_ORDER = ['instructions', 'contributing', 'skill', 'rule', 'settings',
-              'hook', 'githook', 'script', 'ci', 'template', 'styleguide',
+              'hook', 'githook', 'script', 'wired-script', 'ci', 'template', 'styleguide',
               'index', 'lessons', 'lessons-article', 'agent-config']
 
 
@@ -343,6 +383,8 @@ def render_md(report):
                 flags.append('shared: ' + ', '.join(i['shared']))
             if i.get('in-target'):
                 flags.append('in-target')
+            if i.get('wired-by'):
+                flags.append(f'wired by `{i["wired-by"]}`')
             summ = i.get('summary', '').replace('|', '\\|')[:120]
             out.append(
                 f'| {i["kind"]} | `{i["path"]}` | {summ} | {i["lines"]} '
