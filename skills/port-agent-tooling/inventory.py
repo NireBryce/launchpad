@@ -39,6 +39,7 @@ Stdlib only; Python 3.11+.
 """
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -47,8 +48,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Never agent surfaces, at any depth.
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__',
-             'result', 'build', 'dist', 'target', '.direnv'}
+             '.direnv'}
+# Build output when at the repo root; a `tools/target/` or `docs/build/`
+# deeper down may be real source, so those are walked.
+ROOT_ONLY_SKIP = {'result', 'build', 'dist', 'target'}
 
 INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'CONVENTIONS.md',
                      '.cursorrules', '.windsurfrules',
@@ -156,7 +161,9 @@ def walk(root):
     ../.agents/skills`), which os.walk lists as a directory and never
     descends into."""
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        at_root = Path(dirpath) == Path(root)
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
+                       and not (at_root and d in ROOT_ONLY_SKIP)]
         for d in dirnames:
             if (Path(dirpath) / d).is_symlink():
                 yield Path(dirpath) / d
@@ -182,19 +189,35 @@ def frontmatter(text):
     return out
 
 
-def summary(text):
-    """A one-line description: frontmatter description, else H1, else the
-    first comment or text line (scripts and hooks lead with a header)."""
-    fm = frontmatter(text)
-    if fm.get('description'):
-        return fm['description']
-    body = FRONT_RX.sub('', text, count=1)
-    m = H1_RX.search(body)
-    if m:
-        return m.group(1).strip()
-    for line in body.splitlines():
-        s = line.strip().lstrip('#/"\'* ').rstrip('"\'').strip()
-        if s and not s.startswith('!') and not s.startswith('-*-'):
+DECORATION = re.compile(r'^[\s\-=*_~#/]+|[\s\-=*_~#/]+$')
+
+
+def summary(text, path=None):
+    """A one-line description. Markdown: frontmatter description, else the
+    H1. A Python file: its module docstring's first line (read with
+    ast.parse, which never runs it). Anything else (scripts and hooks lead
+    with a comment header): the first comment or text line with
+    decoration (`-- section ----`) stripped and real words in it."""
+    suffix = path.suffix if path else ''
+    if suffix == '.py':
+        try:
+            doc = ast.get_docstring(ast.parse(text))
+        except (SyntaxError, ValueError):
+            doc = None
+        if doc:
+            return doc.strip().splitlines()[0][:160]
+    if suffix in ('', '.md', '.mdc'):
+        fm = frontmatter(text)
+        if fm.get('description'):
+            return fm['description']
+        m = H1_RX.search(FRONT_RX.sub('', text, count=1))
+        if m:
+            return m.group(1).strip()
+    for line in FRONT_RX.sub('', text, count=1).splitlines():
+        s = DECORATION.sub('', line.strip().strip('"\'')).strip()
+        if s.startswith('!') or s.startswith('-*-') or s.startswith('<!--'):
+            continue
+        if len(re.findall(r'[A-Za-z]{2,}', s)) >= 2:
             return s[:160]
     return ''
 
@@ -326,7 +349,7 @@ def scan(label, root, nouns):
         if kind == 'skill':
             item['name'] = frontmatter(text).get('name') or rel.parent.name
         item['summary'] = (settings_summary(text) if path.suffix == '.json'
-                           and kind == 'settings' else summary(text))
+                           and kind == 'settings' else summary(text, path))
         item['lines'] = len(lines)
         item['nouns'] = (sum(1 for ln in lines if noun_rx.search(ln))
                          if noun_rx else 0)
@@ -342,7 +365,7 @@ def scan(label, root, nouns):
         lines = text.splitlines()
         items.append({
             'source': label, 'kind': 'wired-script', 'path': rel,
-            'summary': summary(text), 'lines': len(lines),
+            'summary': summary(text, root / rel), 'lines': len(lines),
             'nouns': (sum(1 for ln in lines if noun_rx.search(ln))
                       if noun_rx else 0),
             'evidence': {'dates': len(DATE_RX.findall(text)),
