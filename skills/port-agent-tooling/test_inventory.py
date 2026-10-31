@@ -226,5 +226,36 @@ class ReviewFindings(unittest.TestCase):
                          '../.agents/skills')
 
 
+class WalkAndSummaries(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_build_dirs_skipped_only_at_the_root(self):
+        d = self.base / 'r'
+        write(d, 'build/.githooks/pre-push', '#!/bin/sh\n# Root build.\n')
+        write(d, 'tools/build/.agents/scripts/x.sh', '#!/bin/sh\n# Deep.\n')
+        paths = {i['path'] for i in run(str(d))['sources']['r']['items']}
+        self.assertNotIn('build/.githooks/pre-push', paths)
+        write(d, '.agents/scripts/target/run.sh', '#!/bin/sh\n# Deep target.\n')
+        paths = {i['path'] for i in run(str(d))['sources']['r']['items']}
+        self.assertIn('.agents/scripts/target/run.sh', paths)
+
+    def test_python_summary_is_the_module_docstring(self):
+        text = ('#!/usr/bin/env python3\n# -- banner -------\n'
+                '"""Ranks docs by drift.\n\nMore."""\nimport os\n')
+        self.assertEqual(inventory.summary(text, Path('x.py')),
+                         'Ranks docs by drift.')
+
+    def test_decoration_and_wordless_lines_are_skipped(self):
+        text = ('#!/bin/sh\n# ------------------\n'
+                '# -- Guards the push ---\n')
+        self.assertEqual(inventory.summary(text, Path('hook.sh')),
+                         'Guards the push')
+
+
 if __name__ == '__main__':
     unittest.main()
