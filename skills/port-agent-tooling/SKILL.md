@@ -166,6 +166,14 @@ conventions:
   against the case it exists to catch, in the target's test runner, in
   the same commit. A clean run on a tree that never had the defect proves
   nothing.
+- **A ported script gets a parity run.** When the port replaces a
+  script the source repo already runs, run both on the same real input
+  (the source repo itself, or a copy with a change applied) and diff the
+  outputs: identical, or every difference explained in the PR. That is
+  the strongest evidence a port has, and the cheapest to get. When it
+  turns up a difference, it is usually a bug in one of the two, so read
+  both before deciding which. The tests should also fail with the port
+  reverted (skill `prove-tests-bite`).
 - **Match the target's layout** if it has one; if it has none, the
   smallest one that works across harnesses is: `AGENTS.md` canonical,
   `CLAUDE.md` a symlink to it, skills as plain markdown at
