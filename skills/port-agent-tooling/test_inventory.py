@@ -161,5 +161,70 @@ class InventoryTest(unittest.TestCase):
         self.assertIn('## Target: target', md)
 
 
+class ReviewFindings(unittest.TestCase):
+    """Each case is one a review reproduced against the first version."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def repo(self, name, files):
+        d = self.base / name
+        for rel, text in files.items():
+            write(d, rel, text)
+        return d
+
+    def test_odd_settings_shapes_do_not_crash(self):
+        for i, text in enumerate(['[1, 2]', '{"permissions": null}',
+                                  '{"hooks": [1]}', '{"hooks": {"X": [1]}}']):
+            d = self.repo(f's{i}', {'.claude/settings.json': text})
+            r = run(str(d))
+            self.assertEqual(len(r['sources'][f's{i}']['items']), 1)
+
+    def test_missing_target_is_an_empty_target(self):
+        src = self.repo('src', {'AGENTS.md': '# A\n'})
+        r = run(str(src), '--target', str(self.base / 'not-yet'))
+        self.assertEqual(r['target']['items'], [])
+
+    def test_same_named_url_sources_get_their_own_clones(self):
+        for owner, body in (('a', '# from a\n'), ('b', '# from b\n')):
+            d = self.repo(f'{owner}/docs', {'AGENTS.md': body})
+            subprocess.run(['git', 'init', '-q', str(d)], check=True)
+            subprocess.run(['git', '-C', str(d), 'add', '-A'], check=True)
+            subprocess.run(['git', '-C', str(d), '-c', 'user.name=t', '-c',
+                            'user.email=t@t.invalid', 'commit', '-qm', 'x'],
+                           check=True)
+        r = run(f'file://{self.base}/a/docs', f'file://{self.base}/b/docs',
+                '--clone-dir', str(self.base / 'clones'))
+        summaries = sorted(i['summary'] for s in r['sources'].values()
+                           for i in s['items'])
+        self.assertEqual(summaries, ['from a', 'from b'])
+
+    def test_list_crossrefs_are_not_issue_refs(self):
+        d = self.repo('e', {'AGENTS.md': '# A\nsee #6 and #7; issue #12, '
+                            '(#13), (§39, #72), /pull/9\n'})
+        i = run(str(d))['sources']['e']['items'][0]
+        self.assertEqual(i['evidence']['issues'], 4)
+
+    def test_same_path_is_path_exists_not_in_target(self):
+        src = self.repo('src2', {'.githooks/commit-msg': '#!/bin/sh\n'})
+        tgt = self.repo('tgt2', {'.githooks/commit-msg': '#!/bin/sh\n'})
+        i = run(str(src), '--target', str(tgt))['sources']['src2']['items'][0]
+        self.assertTrue(i.get('path-exists'))
+        self.assertNotIn('in-target', i)
+
+    def test_directory_symlink_is_reported(self):
+        d = self.repo('ds', {'.agents/skills/x/SKILL.md':
+                             skill('x', 'Does x.')})
+        (d / '.claude').mkdir()
+        os.symlink('../.agents/skills', d / '.claude' / 'skills')
+        items = {i['path']: i for i in run(str(d))['sources']['ds']['items']}
+        self.assertEqual(items['.claude/skills']['symlink'],
+                         '../.agents/skills')
+
+
 if __name__ == '__main__':
     unittest.main()

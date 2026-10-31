@@ -31,7 +31,8 @@ with what the porting skill's tests need about each item:
 With several sources, a skill name present in more than one is marked
 `shared` (independent reinvention is evidence of generality). With
 --target, items whose skill name or path already exists in the target
-are marked `in-target`, and the target's own surfaces are summarised so
+are marked `in-target` (a file at the same path but not the same skill is
+`path-exists`), and the target's own surfaces are summarised so
 the fit test has something to read.
 
 Stdlib only; Python 3.11+.
@@ -79,7 +80,13 @@ DOC_KINDS = [
 ]
 
 DATE_RX = re.compile(r'\b20\d\d-\d\d-\d\d\b')
-ISSUE_RX = re.compile(r'(?<![\w/&])#\d+\b')
+# An issue or PR reference, not any `#N`: a bare `#7` is as often a list
+# cross-reference. Counted: `issue #N`, `PR #N`, `/issues/N`, `/pull/N`,
+# and a `#N` opening or closing a parenthesis (`(#182)`, `(#12, §3)`,
+# `(§39, #72)`).
+ISSUE_RX = re.compile(
+    r'(?i:\b(?:issues?|prs?|pull requests?)\s+#\d+)'
+    r'|/(?:issues|pull)/\d+\b|\(#\d+\b|(?<![\w/&])#\d+\)')
 LESSON_RX = re.compile(r'§\s?\d+')
 FRONT_RX = re.compile(r'\A---\n(.*?)\n---\n', re.S)
 H1_RX = re.compile(r'^#\s+(.+)$', re.M)
@@ -98,19 +105,30 @@ def git(root, *args):
 
 
 def is_url(s):
-    return bool(re.match(r'^(https?|ssh|git)://|^[\w.-]+@[\w.-]+:', s))
+    return bool(re.match(r'^(https?|ssh|git|file)://|^[\w.-]+@[\w.-]+:', s))
 
 
-def resolve_source(spec, clone_dir):
-    """A local path as-is; a URL shallow-cloned. Returns (label, Path)."""
+def resolve_source(spec, clone_dir, n=0, missing_ok=False):
+    """A local path as-is; a URL shallow-cloned into its own numbered
+    directory, so two URLs ending in the same name never share a clone.
+    Returns (label, Path), or (label, None) for a missing path when
+    `missing_ok`."""
     if not is_url(spec):
         p = Path(spec).resolve()
         if not p.is_dir():
+            if missing_ok:
+                return p.name, None
             sys.exit(f'inventory: not a directory: {spec}')
         return p.name, p
     name = re.sub(r'\.git$', '', spec.rstrip('/').rsplit('/', 1)[-1])
-    dest = Path(clone_dir) / name
-    if not dest.exists():
+    dest = Path(clone_dir) / f'{n}-{name}'
+    if dest.exists():
+        url = git(dest, 'remote', 'get-url', 'origin')
+        if url != spec:
+            sys.exit(f'inventory: {dest} holds a clone of {url or "nothing"},'
+                     f' not {spec}; use an empty --clone-dir')
+        print(f'inventory: reusing the clone at {dest}', file=sys.stderr)
+    else:
         r = subprocess.run(['git', 'clone', '--quiet', '--depth', '1',
                             spec, str(dest)], capture_output=True, text=True)
         if r.returncode != 0:
@@ -134,8 +152,14 @@ def repo_nouns(root, extra):
 
 
 def walk(root):
+    """Every file, plus every directory symlink (`.claude/skills ->
+    ../.agents/skills`), which os.walk lists as a directory and never
+    descends into."""
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for d in dirnames:
+            if (Path(dirpath) / d).is_symlink():
+                yield Path(dirpath) / d
         for f in filenames:
             yield Path(dirpath) / f
 
@@ -216,10 +240,16 @@ def settings_summary(text):
         data = json.loads(text)
     except ValueError:
         return ''
-    hooks = data.get('hooks', {}) if isinstance(data, dict) else {}
-    cmds = sum(len(m.get('hooks', [])) for ms in hooks.values()
-               for m in ms if isinstance(m, dict))
-    allow = len(data.get('permissions', {}).get('allow', []))
+    if not isinstance(data, dict):
+        return 'not a settings object'
+
+    def get(d, key, kind):
+        v = d.get(key) if isinstance(d, dict) else None
+        return v if isinstance(v, kind) else kind()
+    hooks = get(data, 'hooks', dict)
+    cmds = sum(len(get(m, 'hooks', list)) for ms in hooks.values()
+               if isinstance(ms, list) for m in ms)
+    allow = len(get(get(data, 'permissions', dict), 'allow', list))
     parts = [f'hooks: {", ".join(hooks)} ({cmds} commands)' if hooks
              else 'no hooks']
     parts.append(f'{allow} allowed permissions')
@@ -348,9 +378,11 @@ def mark(sources, target_items):
             others = skill_sources.get(i.get('name'), set()) - {i['source']}
             if i['kind'] == 'skill' and others:
                 i['shared'] = sorted(others)
-            if (i.get('name') and i.get('name') in t_names) \
-                    or i['path'] in t_paths:
+            if i.get('name') and i.get('name') in t_names:
                 i['in-target'] = True
+            elif i['path'] in t_paths:
+                # The same path is not the same thing: contents may differ.
+                i['path-exists'] = True
 
 
 KIND_ORDER = ['instructions', 'contributing', 'skill', 'rule', 'settings',
@@ -383,6 +415,8 @@ def render_md(report):
                 flags.append('shared: ' + ', '.join(i['shared']))
             if i.get('in-target'):
                 flags.append('in-target')
+            if i.get('path-exists'):
+                flags.append('path-exists in target')
             if i.get('wired-by'):
                 flags.append(f'wired by `{i["wired-by"]}`')
             summ = i.get('summary', '').replace('|', '\\|')[:120]
@@ -421,8 +455,8 @@ def main(argv=None):
     clone_dir = args.clone_dir or tempfile.mkdtemp(prefix='inventory-')
     report = {'sources': {}}
     sources = {}
-    for spec in args.sources:
-        label, root = resolve_source(spec, clone_dir)
+    for n, spec in enumerate(args.sources):
+        label, root = resolve_source(spec, clone_dir, n)
         if label in sources:
             label = f'{label}@{root}'
         nouns = repo_nouns(root, args.noun)
@@ -431,9 +465,15 @@ def main(argv=None):
                                     'items': sources[label]}
     target_items = []
     if args.target:
-        tlabel, troot = resolve_source(args.target, clone_dir)
-        target_items = scan(tlabel, troot, [])
-        report['target'] = {'label': tlabel, 'path': str(troot),
+        tlabel, troot = resolve_source(args.target, clone_dir,
+                                       len(args.sources), missing_ok=True)
+        if troot is None:
+            print(f'inventory: target {args.target} does not exist yet; '
+                  'inventorying the sources against an empty target',
+                  file=sys.stderr)
+        target_items = scan(tlabel, troot, []) if troot else []
+        report['target'] = {'label': tlabel,
+                            'path': str(troot or args.target),
                             'items': target_items}
     mark(sources, target_items)
     if args.format == 'json':

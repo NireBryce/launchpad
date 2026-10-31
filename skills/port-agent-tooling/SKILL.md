@@ -33,8 +33,9 @@ target's own git flow.
 ## Inputs
 
 - **Sources**: local checkouts or git URLs, one or more.
-- **Target**: a local checkout. If it doesn't exist yet, the report
-  still works; the port waits for it.
+- **Target**: a local checkout. If it doesn't exist yet, pass its
+  intended path anyway: the inventory treats it as empty (and says so),
+  the report still works, and the port waits for it.
 - **Repo nouns** for each source: hostnames, user and account names,
   product names, a non-default branch name, the build tool, anything
   that only means something there. `inventory.py` derives the owner, repo
@@ -185,9 +186,9 @@ conventions:
 - **Hooks keep their decision form.** A guard that must hold denies,
   because an ask is a no-op under unattended permission modes. Text the
   agent must read goes where the agent sees it, not only where the human
-  does. A skill that depends on a hook says so in one tagged line, so an
-  agent in a harness without hooks knows to warn the user and check
-  commands by hand.
+  does. A skill that depends on a hook says so in one tagged line under its
+  title (for example `**Needs:** <hook-group>`), so an agent in a harness
+  without hooks knows to warn the user and check commands by hand.
 - **Pre-approved permissions are re-justified, not copied.** Port only
   read-only commands with a closed argument surface. A wildcard over a
   general tool (an interpreter, a package manager, a build tool's eval)
